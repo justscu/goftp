@@ -1,165 +1,58 @@
-package utils
+package main
 
 import (
-	"github.com/ftp"
-	"fmt"
-	"io/ioutil"
-	"time"
-	"os"
-	"bytes"
-	"strings"
+	"github.com/jlaffaye/ftp"
 	"path/filepath"
-)
+	"os"
+	"io/ioutil"
+	"fmt"
+	"strings"
+	"bytes"
+	"time"
+	json "github.com/bitly/go-simplejson"
+	log "github.com/alecthomas/log4go"
+	)
 
-// 列举服务器目录下所有文件
-func listAllFilesServer(conn *ftp.ServerConn, path string) (entrys []*ftp.Entry, err error){
-	return conn.List(path)
+///////////////////////////////////// FtpBase 
+type FtpBase struct {
+	ip, usr, pwd string
+	homePath string
+	conn *ftp.ServerConn
 }
 
-// 判断本地文件是否存在
-func isFileExistLocal(name string) bool {
-	_, err := os.Stat(name)
-	return err == nil || os.IsExist(err)
-}
-
-// 在本地创建目录 如"/home/ftp/abc/def"
-func createPathLocal(path string) error {
-	err := os.MkdirAll(path, 0766)
+func (f* FtpBase) Conn() (err error) {
+	conn, err := ftp.Connect(f.ip)
 	if err != nil {
-		fmt.Printf("createPathLocal[%s] error[%s] \n", path, err)
-	}
-	return err
-}
-
-// 在服务器端创建目录，必须一级一级的创建
-func createFolderServer(conn *ftp.ServerConn, path string) (err error) {
-	a := strings.SplitN(path, "/", -1)
-	var path_tmp string
-	var p string
-	var i int
-	
-	for i = range a {
-		path_tmp += a[i] + "/"
-		err = conn.MakeDir(path_tmp)
-		if i < len(a) -1 {
-			p += a[i] + "/"
-		}
-	}
-	
-	entrys, err := conn.List(p)
-	if err != nil {
-		fmt.Printf("conn.List[%s] error[%s] \n", p, err)
+		log.Info("ftp.Connect[%s] %s", f.ip, err)
 		return err
 	}
 	
-	for j := range entrys {
-		if entrys[j].Name == a[i] {
-//			fmt.Printf("mkdir [%s] success \n",path)
-			return nil
-		} 
-	}
-
-	return nil
-}
-
-// 在本地创建文件
-func createFileLocal(name string) error {
-	i := len(name) -1
-	for ; name[i] != '/'; i-- {
-	} 
-	path := name[:i]
-	
-	err := createFolderLocal(path)
+	err = conn.Login(f.usr, f.pwd)
 	if err != nil {
-		fmt.Printf("createFolderLocal[%s] failed[err] \n", path, err)
+		log.Info("ftp.Login[%s:%s] %s", f.usr, f.pwd, err)
 		return err
-	}
-
-	if isFileExistLocal(name) {
-		err := os.Rename(name, name + "." + fmt.Sprintf("%d", time.Now().Nanosecond())) //将旧文件备份
-		if err != nil {
-			fmt.Printf("Rename old file[%s] failed[err] \n", name, err)
-			return err
-		}
 	}
 	
-	fs, err := os.Create(name)
-	defer fs.Close()
-	
+	f.conn = conn
+	f.homePath, err = conn.CurrentDir()
 	if err != nil {
-		fmt.Printf("create file[%s] failed[err] \n", name, err)
+		log.Info("conn.CurrentDir(): [%s][%s:%s] %s", f.ip, f.usr, f.pwd, err)
 		return err
-	}
-
-	return nil
-}
-
-// 从服务器上取文件
-func getFileFromServer(conn *ftp.ServerConn, srcFileName string, dstFileName string) error{
-//	fmt.Printf("getFileFromServer: srcFileName[%s], dstFileName[%s] \n", srcFileName, dstFileName)
-	r, err := conn.Retr(srcFileName)
-	if err != nil {
-		fmt.Printf("getFileFromServer: conn.Retr[%s] error[%s] \n", srcFileName, err)
-		return err
-	} 
-
-	defer r.Close()
-	buf, err := ioutil.ReadAll(r)
-	if err != nil {
-		return err
-	} else {
-		createFileLocal(dstFileName)
-		ioutil.WriteFile(dstFileName, buf, os.ModeAppend)
 	}
 	
 	return nil
 }
 
-// 将文件放到服务器上
-func putFileToServer(conn *ftp.ServerConn, srcFileName string, dstFileName string) error {
-//	fmt.Printf("putFileToServer: srcFileName[%s], dstFileName[%s] \n", srcFileName, dstFileName)
-	if isFileExistLocal(srcFileName) == false {
-		fmt.Printf("putFileToServer: srcFileName[%s] not exist at local\n", srcFileName)
-		return os.ErrNotExist
-	}
-	
-	b, err := ioutil.ReadFile(srcFileName)
-	if err != nil {
-		fmt.Printf("read srcFileName[%s] failed[%s] \n", srcFileName, err)
-		return err
-	}
-	
-	// 在服务器上创建目录
-	i := len(dstFileName) -1
-	for ; dstFileName[i] != '/'; i-- {
-	} 
-	dstPath := dstFileName[:i]
-	
-	err = createFolderServer(conn, dstPath)
-	if err != nil {
-		fmt.Printf("createPathLocal[%s] failed[err] \n", dstPath, err)
-		return err
-	}
-	
-	// 在服务器端创建文件
-	err = conn.Stor(dstFileName, bytes.NewBufferString(string(b)))
-	if err != nil {
-		fmt.Printf("stor srcName[%s] dstName[%s] failed[%s] \n", srcFileName, dstFileName, err)
-	}
-	return err
-}
-
-// 在本地创建folder
-func getFolderFromServer(conn *ftp.ServerConn, srcFolder string, dstFolder string) error{
-//	fmt.Printf("getFolderFromServer: srcFolder[%s], dstFolder[%s] \n", srcFolder, dstFolder)
-	createPathLocal(dstFolder)
+func (f* FtpBase) Close() (err error) {
+	f.conn.Logout()
+	f.conn.Quit()
+	f.conn = nil
 	
 	return nil
 }
 
-// 遍历本地目录，将子目录下的文件，放到m中
-func walkFolderLocal(folder string, m map[string]string) (err error) {
-	err = filepath.Walk(folder, func(path string, f os.FileInfo, err error) error {	
+func (f FtpBase) ListLocal(folder string, m map[string]string) (err error) {
+	err = filepath.Walk(folder, func(path string, f os.FileInfo, err error) error {
         if ( f == nil ) {
 			return err
 		} else if f.IsDir() {
@@ -175,80 +68,60 @@ func walkFolderLocal(folder string, m map[string]string) (err error) {
 	return 
 }
 
-// 将本地目录拷贝到服务器
-func putFolderToServer(conn *ftp.ServerConn, srcFolder string, dstFolder string) error {
-//	fmt.Printf("putFolderToServer: srcFolder[%s], dstFolder[%s] \n", srcFolder, dstFolder)
-	if dstFolder[len(dstFolder)-1] == '/' {
-		dstFolder = dstFolder[:len(dstFolder)-1]
+func (f FtpBase) ListServer(folder string, m map[string]string) (err error) {
+	if folder[len(folder)-1] == '/' {
+		folder = folder[:len(folder)-1]
 	}
-	
-	if srcFolder[len(srcFolder)-1] == '/' {
-		srcFolder = srcFolder[:len(srcFolder)-1]
-	}
-	
-	m := make(map[string]string)
-	err := walkFolderLocal(srcFolder, m)
-	delete(m, srcFolder) //不拷贝父路径
-        
-//    for i := range m {
-//    	fmt.Printf("putFolderToServer: [%s] [%s] \n", m[i], i)
-//    }
-    
-    for i := range m {
-    	tmpPath := i[len(srcFolder)+1:]
-		switch m[i] {
-			case "folder": createFolderServer(conn, dstFolder+"/"+tmpPath)
-			case "file": putFileToServer(conn, i, dstFolder+"/"+tmpPath)
+		
+	// 文件
+	err = f.conn.ChangeDir(folder)
+	if  err != nil { //failed
+		i:= len(folder)-1
+		for ; folder[i] != '/'; i-- {
 		}
-    }
-	
-	return err
-}
-
-// 在本地创建文件夹
-func createFolderLocal(folder string) error {
-//	fmt.Printf("createFolderLocal:[%s]\n", folder)
-	_, err := os.Stat(folder) 
-	if err == nil || os.IsExist(err) {
-		return nil
-	} else {
-		defer createPathLocal(folder)
-	}
-	
-	for i := len(folder)-1; i > 0; i-- {
-		if folder[i] == '/' {
-			_, err = os.Stat(folder[0:i])
-			if err == nil || os.IsExist(err) {
+		parentDir := folder[:i+1]
+		childName := folder[i+1:]
+		entrys2, _ := f.conn.List(parentDir)
+		for k := range entrys2 {
+			if entrys2[k].Name == childName {
+				m[folder] = "file"
 				return nil
-			} else {
-				defer createPathLocal(folder[0:i])
 			}
 		}
+		
+		return nil
 	}
-
-	return nil
-}
-
-//获取服务器上所有的文件和目录
-func getAllEntrysServer(conn *ftp.ServerConn, src string, m map[string]string) (err error) {
-	i:= len(src)-1
-	for ; src[i] != '/'; i-- {
-	}
-	parentDir := src[:i+1]
 	
-	entrys, err := conn.List(src)
-	for i := range entrys {
-		switch entrys[i].Type {
-			case ftp.EntryTypeFile: {
-				if parentDir+entrys[i].Name == src {
-					m[src] = "file"
-				} else {
-					m[src+"/"+entrys[i].Name] = "file"
+	// 目录
+	err = f.conn.ChangeDir(f.homePath)
+	if err != nil {
+		log.Info("f.conn.ChangeDir[%s] error %s", f.homePath, err)
+		return
+	}
+	entrys, err := f.conn.List(folder)
+	if len(entrys) >= 1 {
+		m[folder] = "folder"
+		for i := range(entrys) {
+			switch entrys[i].Type {
+				case ftp.EntryTypeFile: {
+					m[folder+"/"+entrys[i].Name] = "file"
+				}
+				case ftp.EntryTypeFolder: {
+					m[folder+"/"+entrys[i].Name] = "folder"
+					f.ListServer(folder+"/"+entrys[i].Name, m)
 				}
 			}
-			case ftp.EntryTypeFolder: {
-				m[src+"/"+entrys[i].Name] = "folder"
-				getAllEntrysServer(conn, src+"/"+entrys[i].Name, m)
+		}
+	} else {
+		i:= len(folder)-1
+		for ; folder[i] != '/'; i-- {
+		}
+		parentDir := folder[:i+1]
+		entrys2, _ := f.conn.List(parentDir)
+		for i := range entrys2 {
+			if folder == parentDir +entrys2[i].Name {
+				m[folder] = "folder"
+				break;
 			}
 		}
 	}
@@ -256,121 +129,267 @@ func getAllEntrysServer(conn *ftp.ServerConn, src string, m map[string]string) (
 	return
 }
 
-func getFromServer(conn *ftp.ServerConn, src string, dst string) (err error) {
-	if dst[len(dst)-1] == '/' {
-		dst = dst[:len(dst)-1]
+func (f FtpBase) CreateFolderLocal(folder string) (err error) {
+	_, err = os.Stat(folder) 
+	if err == nil || os.IsExist(err) {
+		return nil
+	} else {
+		err = os.MkdirAll(folder, 0766)
+		if err != nil {
+			log.Info("CreateFolderLocal[%s] error[%s]", folder, err)
+		}
+		return err
 	}
+} 
+
+func (f FtpBase) CreateFolderServer(folder string) (err error) {
+//	fmt.Printf("CreateFolderServer: [%s] \n", folder)
+	a := strings.SplitN(folder, "/", -1)
+	var path_tmp string
+	var p string
+	var i int
 	
-	if src[len(src)-1] == '/' {
-		src = src[:len(src)-1]
-	}
-		
-	m := make(map[string]string)
-	err = getAllEntrysServer(conn, src, m)
-
-	if m[src] != "file" {
-		delete(m, src)
-	}
-
-	for i := range m {
-		switch m[i] {
-			case "file": {
-				if i == src {
-					tmp_len := len(src)-1
-					for ; tmp_len > 0 && src[tmp_len] != '/'; tmp_len--{
-						
-					}
-					getFileFromServer(conn, src, dst+i[tmp_len:])
-				} else {
-					getFileFromServer(conn, i, dst + i[len(src):]) //文件
-				}
-			}
-			case "folder": {
-				createFolderLocal(dst+i[len(src):])
-			}
+	for i = range a {
+		path_tmp += a[i] + "/"
+		err = f.conn.MakeDir(path_tmp)
+		if i < len(a) -1 {
+			p += a[i] + "/"
 		}
 	}
 	
-	return 
-}
-
-func putToServer(conn *ftp.ServerConn, src string, dst string) (err error) {
-//	fmt.Printf("putToServer: src[%s] dst[%s] \n", src, dst)
-	state, err := os.Stat(src) 
+	entrys, err := f.conn.List(p)
 	if err != nil {
-		fmt.Printf("os.Stat[%s] error[%s] \n", src, err)
-		return err
-	}
-	if state.IsDir() == false { //文件
-		i := len(src)-1
-		for ; src[i] != '/'; i-- {
-			
-		}
-		return putFileToServer(conn, src, dst+src[i:])
-	} else { //路径
-		return putFolderToServer(conn, src, dst)
-	}
-}
-
-type ftpOpe struct {}
-
-// 将目录或文件，从一个ftpserver拷贝到另外一个ftpserver
-func (f *ftpOpe) Ftp_copy(src_IP string, src_user string, src_pwd string, src_path string,
-		dst_IP string, dst_user string, dst_pwd string, dst_path string) error{
-	defer os.RemoveAll("/tmp/ftp/")
-	
-	conn, err := ftp.Connect(src_IP)
-	if err != nil {
-		fmt.Printf("ftp.Connect[%s] [%s] \n", src_IP, err)
+		log.Info("f.conn.List: [%s] error[%s]", p, err)
 		return err
 	}
 	
-	err = conn.Login(src_user, src_pwd)
-	if err != nil {
-		fmt.Printf("conn.Login[%s] [%s] \n", src_IP, err)
-		return err
-	}
-	
-	getFromServer(conn, src_path, "/tmp/ftp/")
-	conn.Logout()
-	conn.Quit()
-
-//	fmt.Println("-------------------------------------------")
-	conn, err = ftp.Connect(dst_IP)
-	if err != nil {
-		fmt.Printf("ftp.Connect[%s] [%s] \n", dst_IP, err)
-		return err
-	}
-	
-	err = conn.Login(dst_user, dst_pwd)
-	if err != nil {
-		fmt.Printf("conn.Login[%s] [%s] \n", dst_IP, err)
-		return err
+	for j := range entrys {
+		if entrys[j].Name == a[i] {
+			return nil
+		} 
 	}
 
-	putToServer(conn, "/tmp/ftp/", dst_path)
-	conn.Logout()
-	conn.Quit()
 	return nil
 }
 
-// 获取目录的结构
-func (f *ftpOpe) WalkDir(IP string, user string, pwd string, path string) (entrys []*ftp.Entry, error error){
-	conn, err := ftp.Connect(IP)
+func (f FtpBase) GetFile(srcFile string, dstFile string) (err error) {
+//	fmt.Printf("GetFile: srcFile[%s] dstFile[%s] \n", srcFile, dstFile)
+	// create folder
+	i := len(dstFile)-1
+	for ; i >= 0 && dstFile[i] != '/'; i-- {
+	}
+	f.CreateFolderLocal(dstFile[:i])
+	
+	// create file
+	r, err := f.conn.Retr(srcFile)
 	if err != nil {
-		fmt.Printf("ftp.Connect[%s] [%s] \n", IP, err)
+		log.Info("GetFile: f.conn.Retr[%s] error[%s]", srcFile, err)
+		return err
+	} 
+
+	defer r.Close()
+	buf, err := ioutil.ReadAll(r)
+	if err == nil {
+		err = ioutil.WriteFile(dstFile, buf, 0766) //os.ModeAppend
+		if err != nil {
+			log.Info("ioutil.WriteFile: dstFile[%s] err[%s]", dstFile, err)
+		}
+	}
+	
+	return err
+}
+
+// 判断本地文件是否存在
+func (f FtpBase) isFileExistLocal(name string) bool {
+	_, err := os.Stat(name)
+	return err == nil || os.IsExist(err)
+}
+
+func (f FtpBase) PutFile(srcFile string, dstFile string) (err error) {
+//	fmt.Printf("PutFile: srcFile[%s] dstFile[%s] \n", srcFile, dstFile)
+	if f.isFileExistLocal(srcFile) == false {
+		log.Info("isFileExistLocal: srcFile[%s] not exist at local", srcFile)
+		return os.ErrNotExist
+	}
+		
+	// 在服务器上创建目录
+	if dstFile[len(dstFile)-1] == '/' {
+		dstFile = dstFile[:len(dstFile)-1]
+	}
+	i := len(dstFile) -1
+	for ; dstFile[i] != '/'; i-- {
+	} 
+	dstPath := dstFile[:i]
+	
+	err = f.CreateFolderServer(dstPath)
+	if err != nil {
+		log.Info("CreateFolderServer[%s] failed[err]", dstPath, err)
+		return err
+	}
+	
+	b, err := ioutil.ReadFile(srcFile)
+	if err != nil {
+		log.Info("read srcFile[%s] failed[%s]", srcFile, err)
+		return err
+	}
+	// 在服务器端创建文件
+	err = f.conn.Stor(dstFile, bytes.NewBufferString(string(b)))
+	if err != nil {
+		log.Info("stor srcName[%s] dstName[%s] failed[%s]", srcFile, dstFile, err)
+	}
+	return err
+}
+
+/////////////////////////////////////// FtpOpe
+type FtpOpe struct {
+	SrcIP    string
+	SrcUsr   string
+	SrcPwd   string
+	DstIP    string
+	DstUsr   string
+	DstPwd   string
+}
+
+func (f *FtpOpe) FtpCopy(src_IP string, src_user string, src_pwd string, src_path string,
+		dst_IP string, dst_user string, dst_pwd string, dst_path string) (err error){	
+	tmp_dir := fmt.Sprintf("%s/%d/", "/tmp/ftp/dzhyun", time.Now().Unix())
+	
+	os.RemoveAll(tmp_dir)
+	defer os.RemoveAll(tmp_dir)
+	
+	f1 := FtpBase{src_IP, src_user, src_pwd, "", nil}
+	err = f1.Conn()
+	if(err != nil) {
+		return
+	} 
+	defer f1.Close()
+	
+	if src_path[0] != '/' {
+		var dir string
+		dir, err = f1.conn.CurrentDir()
+		if err != nil {
+			return
+		}
+		src_path = dir + "/" + src_path
+	}
+	m1 := make(map[string]string)
+	err = f1.ListServer(src_path, m1)
+	if err != nil {
 		return 
 	}
 	
-	err = conn.Login(user, pwd)
-	if err != nil {
-		fmt.Printf("conn.Login[%s] [%s] \n", IP, err)
-		return 
+	for k, v := range m1 {
+		switch v {			
+			case "file": {
+				if k == src_path {
+					tmp_len := len(k)-1
+					for ; tmp_len > 0 && k[tmp_len] != '/'; tmp_len--{
+						
+					}
+					f1.GetFile(k, tmp_dir+k[tmp_len:])
+				} else {
+					f1.GetFile(k, tmp_dir+k[len(src_path):])
+				}
+			}
+			case "folder": {
+				f1.CreateFolderLocal(tmp_dir+k[len(src_path):])
+			}
+		}
+		
 	}
 	
-	entrys, err = conn.List(path)
-	conn.Logout()
-	conn.Quit()
+	fmt.Println("---------------")
+	if dst_path[len(dst_path)-1] == '/' {
+		dst_path = dst_path[:len(dst_path)-1]
+	}
 	
+	f2 := FtpBase{dst_IP, dst_user, dst_pwd, "", nil}
+	err = f2.Conn()
+	if(err != nil) {
+		return
+	} 
+	defer f2.Close()
+	
+	if dst_path[0] != '/' {
+		var dir string
+		dir, err = f2.conn.CurrentDir()
+		if err != nil {
+			return
+		}
+		dst_path = dir + "/" + dst_path
+	}
+
+	m2 := make(map[string]string)
+	f2.ListLocal(tmp_dir, m2)
+	for k, v := range m2 {
+		switch v {
+			case "file": f2.PutFile(k, dst_path+"/"+k[len(tmp_dir):])
+			case "folder":f2.CreateFolderServer(dst_path+"/"+k[len(tmp_dir):])
+		}
+	}
+	
+	return nil
+}
+
+func (f FtpOpe) FtpWalkDir(IP string, user string, pwd string, path string) (js *json.Json, err error){
+	lf := &FtpBase{IP, user, pwd, "", nil}
+	err = lf.Conn()
+	if err != nil {
+		return
+	}
+	
+	if path[0] != '/' {
+		var dir string
+		dir, err = lf.conn.CurrentDir()
+		if err != nil {
+			return
+		}
+		path = dir + "/" + path 
+	}
+	
+	js, err = json.NewJson([]byte(`{}`))
+	entrys, err := lf.conn.List(path) 
+	for i := range entrys {
+		switch entrys[i].Type {
+			case ftp.EntryTypeFile: js.Set(entrys[i].Name, "file")
+			case ftp.EntryTypeFolder: js.Set(entrys[i].Name, "folder")
+		}
+	}
+	
+	lf.Close()
 	return 
+}
+
+//////////////////////// test
+
+func Test_WalkDir() {
+	// (1) 绝对路径
+	f := FtpOpe{}
+	
+	js, _ := f.FtpWalkDir("10.15.107.74:21", "dzhyunftp", "123456", "/home/dzhyunftp")		
+	b, _ := js.MarshalJSON()
+	fmt.Println(string(b))
+	// (2) 相对路径
+	js, _ = f.FtpWalkDir("10.15.107.74:21", "dzhyunftp", "123456", "push2")		
+	b, _ = js.MarshalJSON()
+	fmt.Println(string(b))
+}
+
+func Test_FtpCopy() {
+	// (1)相对路径
+	f := FtpOpe{}
+	f.FtpCopy("10.15.107.74:21", "dzhyunftp", "123456", "/home/dzhyunftp/push1", 
+	"10.15.107.75:21", "yunftp75", "123456", "/home/yunftp75/push1")
+	fmt.Printf("end1 \n")
+	
+	// (2)绝对路径 
+	f.FtpCopy("10.15.107.74:21", "dzhyunftp", "123456", "push2", 
+	"10.15.107.75:21", "yunftp75", "123456", "push2")
+	fmt.Printf("end2 \n")
+	time.Sleep(time.Millisecond*3000)
+}
+
+func main() {
+	Test_WalkDir()
+	Test_FtpCopy()
 }
