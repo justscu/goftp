@@ -16,6 +16,7 @@ import (
 // EntryType describes the different types of an Entry.
 type EntryType int
 
+// The differents types of an Entry
 const (
 	EntryTypeFile EntryType = iota
 	EntryTypeFolder
@@ -26,6 +27,7 @@ const (
 type ServerConn struct {
 	conn     *textproto.Conn
 	host     string
+	timeout  time.Duration
 	features map[string]string
 }
 
@@ -43,20 +45,33 @@ type response struct {
 	c    *ServerConn
 }
 
-// Connect initializes the connection to the specified ftp server address.
+// Connect is an alias to Dial, for backward compatibility
+func Connect(addr string) (*ServerConn, error) {
+	return Dial(addr)
+}
+
+// Dial is like DialTimeout with no timeout
+func Dial(addr string) (*ServerConn, error) {
+	return DialTimeout(addr, 0)
+}
+
+// DialTimeout initializes the connection to the specified ftp server address.
 //
 // It is generally followed by a call to Login() as most FTP commands require
 // an authenticated user.
-func Connect(addr string) (*ServerConn, error) {
-	conn, err := textproto.Dial("tcp", addr)
+func DialTimeout(addr string, timeout time.Duration) (*ServerConn, error) {
+	tconn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return nil, err
 	}
+
+	conn := textproto.NewConn(tconn)
 
 	a := strings.SplitN(addr, ":", 2)
 	c := &ServerConn{
 		conn:     conn,
 		host:     a[0],
+		timeout:  timeout,
 		features: make(map[string]string),
 	}
 
@@ -170,7 +185,7 @@ func (c *ServerConn) pasv() (port int, err error) {
 	start := strings.Index(line, "(")
 	end := strings.LastIndex(line, ")")
 	if start == -1 || end == -1 {
-		err = errors.New("Invalid EPSV response format")
+		err = errors.New("Invalid PASV response format")
 		return
 	}
 
@@ -198,27 +213,32 @@ func (c *ServerConn) pasv() (port int, err error) {
 func (c *ServerConn) openDataConn() (net.Conn, error) {
 	var port int
 	var err error
-
-	//  If features contains nat6 or EPSV => EPSV
-	//  else -> PASV
-	_, nat6Supported := c.features["nat6"]
-	_, epsvSupported := c.features["EPSV"]
-	if nat6Supported || epsvSupported {
-		port, err = c.epsv()
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		port, err = c.pasv()
-		if err != nil {
-			return nil, err
-		}
+	
+	// hc edit: disable check for EPSV, use PASV only
+    /*
+		//  If features contains nat6 or EPSV => EPSV
+		//  else -> PASV
+		_, nat6Supported := c.features["nat6"]
+		_, epsvSupported := c.features["EPSV"]
+		if nat6Supported || epsvSupported {
+			port, err = c.epsv()
+			if err != nil {
+				return nil, err
+			}
+		} else {
+	*/
+	port, err = c.pasv()
+	if err != nil {
+		return nil, err
 	}
+		// hc edit: disable check for EPSV, use PASV only
+    /*  }
+     */
 
 	// Build the new net address string
 	addr := fmt.Sprintf("%s:%d", c.host, port)
 
-	conn, err := net.Dial("tcp", addr)
+	conn, err := net.DialTimeout("tcp", addr, c.timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -251,14 +271,14 @@ func (c *ServerConn) cmdDataConn(format string, args ...interface{}) (net.Conn, 
 		return nil, err
 	}
 
-	code, msg, err := c.conn.ReadCodeLine(-1)
+	code, msg, err := c.conn.ReadResponse(-1)
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
 	if code != StatusAlreadyOpen && code != StatusAboutToSend {
 		conn.Close()
-		return nil, &textproto.Error{code, msg}
+		return nil, &textproto.Error{Code: code, Msg: msg}
 	}
 
 	return conn, nil

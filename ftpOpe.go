@@ -43,12 +43,42 @@ func (f* FtpBase) Conn() (err error) {
 	return nil
 }
 
+func (f* FtpBase) ReConn() (err error) {
+	f.Close()
+	for {
+		err = f.Conn()
+		if err == nil {
+			return nil
+		}
+		time.Sleep(time.Second*10)
+		log4.Warn("Reconn err[%s], sleep 10s", err)
+	}	
+}
+
 func (f* FtpBase) Close() (err error) {
-	f.conn.Logout()
-	f.conn.Quit()
-	f.conn = nil
+	if f.conn != nil {
+		f.conn.Logout()
+		f.conn.Quit()
+		f.conn = nil
+	}
 	
 	return nil
+}
+
+func (f* FtpBase) Noop() {
+	for {
+		if f.conn == nil {
+			f.ReConn()
+		}
+		
+		err := f.conn.NoOp()
+		if err == nil {
+			break
+		} else {
+			log4.Error("Noop err[%s]", err)
+			f.ReConn()
+		}
+	}
 }
 
 func (f FtpBase) ListLocal(folder string, m map[string]string) (err error) {
